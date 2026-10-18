@@ -49,7 +49,11 @@ func RsaSign(params map[string]string, privateKey string, keyFromFile bool) (str
 
 // RsaCheckV1 密钥模式 RSA2 通用验签方法（V1 规则）。
 //
-// 主要用于支付接口异步通知验签：剔除 sign 与 sign_type 两个参数后验签。
+// 主要用于支付接口异步通知验签：剔除 sign 与 sign_type 两个参数后，
+// 剩余参数按通知口径拼接（仅剔除空值，值以 "@" 开头的字段参与签名）。
+//
+// 职责边界：本方法只判定签名真伪，不校验 app_id、seller_id、金额与通知 URL，
+// 调用方必须自行完成业务侧校验（公钥模式下支付宝公钥全商户共用）。
 //
 // 参数:
 //   - params: 从支付宝接收到的完整参数集合（含 sign）
@@ -72,12 +76,13 @@ func RsaCheckV1(params map[string]string, alipayPublicKey string, keyFromFile bo
 	delete(copied, "sign")
 	delete(copied, "sign_type")
 
-	return Verify(GetSignContent(copied), sign, alipayPublicKey, keyFromFile)
+	return Verify(GetSignContentForNotify(copied), sign, alipayPublicKey, keyFromFile)
 }
 
 // RsaCheckV2 密钥模式 RSA2 通用验签方法（V2 规则）。
 //
-// 主要用于生活号事件消息等发送到应用网关地址的异步信息验签：仅剔除 sign 参数。
+// 主要用于生活号事件消息等发送到应用网关地址的异步信息验签：
+// 仅剔除 sign 参数（sign_type 参与签名），剩余参数按通知口径拼接（只剔空值，保留 "@" 值）。
 //
 // 参数与返回值同 RsaCheckV1。
 func RsaCheckV2(params map[string]string, alipayPublicKey string, keyFromFile bool) (bool, error) {
@@ -88,7 +93,7 @@ func RsaCheckV2(params map[string]string, alipayPublicKey string, keyFromFile bo
 	copied := copyParams(params)
 	delete(copied, "sign")
 
-	return Verify(GetSignContent(copied), sign, alipayPublicKey, keyFromFile)
+	return Verify(GetSignContentForNotify(copied), sign, alipayPublicKey, keyFromFile)
 }
 
 // Verify 通用验签方法。
@@ -106,9 +111,10 @@ func Verify(data, sign, alipayPublicKey string, keyFromFile bool) (bool, error) 
 	return security.RSAVerify(data, sign, alipayPublicKey, keyFromFile)
 }
 
-// GetSignContent 获取签名字符串：按键名升序拼接为 "k1=v1&k2=v2"。
+// GetSignContent 获取请求侧签名字符串：按键名升序拼接为 "k1=v1&k2=v2"。
 //
-// 空值与以 "@" 开头的参数（如文件路径引用）不参与拼接，对齐 PHP 行为。
+// 空值与以 "@" 开头的参数（"@文件路径" 上传标记）不参与拼接，对齐 PHP 请求签名行为；
+// 仅用于请求签名，异步通知验签请用 GetSignContentForNotify。
 //
 // 参数:
 //   - params: 参数集合
@@ -116,6 +122,25 @@ func Verify(data, sign, alipayPublicKey string, keyFromFile bool) (bool, error) 
 // 返回值:
 //   - string: 拼接后的签名字符串
 func GetSignContent(params map[string]string) string {
+	return buildSignContent(params, true)
+}
+
+// GetSignContentForNotify 获取异步通知验签侧的待签串：按键名升序拼接，仅剔除空值。
+//
+// 对齐支付宝官方通知验签口径：值以 "@" 开头的字段照常参与签名
+// （如 subject="@团购订单"），剔除集合由调用方（RsaCheckV1/V2）决定。
+//
+// 参数:
+//   - params: 已剔除相应参数的通知参数集合
+//
+// 返回值:
+//   - string: 拼接后的待验签字符串
+func GetSignContentForNotify(params map[string]string) string {
+	return buildSignContent(params, false)
+}
+
+// buildSignContent 按键名升序拼接非空参数；dropAtPrefixed 为 true 时同时剔除值以 "@" 开头的参数。
+func buildSignContent(params map[string]string, dropAtPrefixed bool) string {
 	keys := make([]string, 0, len(params))
 	for k := range params {
 		keys = append(keys, k)
@@ -126,7 +151,10 @@ func GetSignContent(params map[string]string) string {
 	i := 0
 	for _, k := range keys {
 		v := params[k]
-		if strings.TrimSpace(v) == "" || strings.HasPrefix(v, "@") {
+		if strings.TrimSpace(v) == "" {
+			continue
+		}
+		if dropAtPrefixed && strings.HasPrefix(v, "@") {
 			continue
 		}
 		if i > 0 {

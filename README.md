@@ -108,6 +108,9 @@ result, apiErr := executor.Execute("/v3/alipay/trade/query", "GET",
 	})
 ```
 
+> **业务码判定**：SDK 对齐 PHP 行为，HTTP 2xx 即视为调用成功，不解析响应体 `code`；
+> 退款等资金写操作必须自行判定业务码，可用 `alipay.IsBizSuccess(code)`（`code == "10000"` 为成功）。
+
 ## 页面类接口（V2 网关兼容）
 
 ### App 支付（sdkExecute，返回给客户端的 orderStr）
@@ -149,8 +152,18 @@ if err == nil && ok {
 }
 ```
 
-- `RsaCheckV1`：支付通知等接口（剔除 `sign`、`sign_type` 后验签）
-- `RsaCheckV2`：生活号等应用网关消息（仅剔除 `sign`）
+- `RsaCheckV1`：支付通知等接口（剔除 `sign`、`sign_type` 与空值后验签，值以 `@` 开头的字段参与签名）
+- `RsaCheckV2`：生活号等应用网关消息（仅剔除 `sign`，`sign_type` 参与签名）
+
+> **职责边界**：`RsaCheckV1`/`RsaCheckV2` 只判定签名真伪，不校验业务字段——
+> 这与官方 PHP SDK 的职责划分一致。公钥模式下支付宝公钥为全商户共用，
+> 任何商户的合法通知都能通过验签。验签通过后，调用方必须自行完成：
+>
+> 1. `app_id` 与自身应用配置一致；
+> 2. `out_trade_no`、`total_amount` 与本地订单记录一致（防改单、防跨单冒领）；
+> 3. `seller_id`（如使用）与预期收款方一致；
+> 4. `trade_status` 属于需要处理的状态，且重复通知幂等；
+> 5. 通知来源 URL/域名校验与 `failure` 时返回失败应答（支付宝按策略重发约 25 小时）。
 
 ## 敏感信息加密
 
@@ -191,7 +204,7 @@ go build ./... && go test .
 go test . -v
 ```
 
-覆盖：证书 SN 计算（issuer 反序规则）、V3 签名串与 Authorization 格式、响应验签（含失败路径）、AES 加解密往返、httptest 模拟网关全流程（签名→服务端验签→响应签名→客户端验签→解密）、V2 sdkExecute/pageExecute、异步通知验签 V1/V2。
+覆盖：证书 SN 计算（issuer 反序规则）、V3 签名串与 Authorization 格式、响应验签（含失败路径）、AES 加解密往返、httptest 模拟网关全流程（签名→服务端验签→响应签名→客户端验签→解密）、V2 sdkExecute/pageExecute（含公钥模式不输出空证书参数）、异步通知验签 V1/V2（官方通知口径 golden 串、`@` 前缀值参与签名、空值剔除、篡改/错公钥拒绝、V1/V2 剔除集合对照）。
 
 ## 参考
 

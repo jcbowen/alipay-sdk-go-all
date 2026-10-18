@@ -197,6 +197,24 @@ func (g *GenericExecuteApi) ExecuteRaw(resourcePath, method string, req *OpenApi
 	return []byte(content), resp.Header, resp.StatusCode, nil
 }
 
+// IsBizSuccess 判定 V3 响应体业务码是否表示成功。
+//
+// SDK 对齐 PHP 行为：HTTP 2xx 时不解析响应体 code，调用方需自行判定
+// （尤其退款等资金写操作，网关异常场景可能以 HTTP 200 返回非 10000 的 code）。
+//
+// 参数:
+//   - code: 响应体中的 code 字段（如 "10000"）
+//
+// 返回值:
+//   - bool: true 表示业务成功（code == "10000"）
+//
+// 使用示例:
+//
+//	if !alipay.IsBizSuccess(fmt.Sprint(result["code"])) { /* 业务失败处理 */ }
+func IsBizSuccess(code string) bool {
+	return code == "10000"
+}
+
 // buildRequest 构造已签名请求。
 //
 // 参数:
@@ -446,8 +464,13 @@ func (g *GenericExecuteApi) handleParams(method string, bizParams map[string]int
 	systemParams["timestamp"] = time.Now().Format("2006-01-02 15:04:05")
 	systemParams["charset"] = "UTF-8"
 	systemParams["sign_type"] = SignTypeRSA2
-	systemParams["app_cert_sn"] = g.configUtil.GetAppCertSN()
-	systemParams["alipay_root_cert_sn"] = g.configUtil.GetRootCertSN()
+	// 证书序列号仅证书模式有值；公钥模式下不注入，避免页面 URL/表单出现空参数
+	if appCertSN := g.configUtil.GetAppCertSN(); appCertSN != "" {
+		systemParams["app_cert_sn"] = appCertSN
+	}
+	if rootCertSN := g.configUtil.GetRootCertSN(); rootCertSN != "" {
+		systemParams["alipay_root_cert_sn"] = rootCertSN
+	}
 
 	if isEncrypt, err := g.configUtil.IsEncrypt(); err != nil {
 		return nil, err

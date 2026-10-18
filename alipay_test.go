@@ -360,6 +360,39 @@ func TestV2PageExecuteGet(t *testing.T) {
 	if !strings.HasPrefix(out, DefaultServerUrl+V2GatewayPath+"?") {
 		t.Fatalf("URL 前缀错误: %s", out)
 	}
+	// 公钥模式不应输出空证书序列号参数
+	if strings.Contains(out, "app_cert_sn") || strings.Contains(out, "alipay_root_cert_sn") {
+		t.Fatalf("公钥模式 URL 不应含证书参数: %s", out)
+	}
+}
+
+// TestV2PageExecuteGetCertMode 校验证书模式下 pageExecute 输出证书序列号参数
+func TestV2PageExecuteGetCertMode(t *testing.T) {
+	key := genKeyPair(t)
+	certPEM := genSelfSignedCert(t, big.NewInt(999))
+	cfg := &AlipayConfig{
+		AppId:                 "app001",
+		PrivateKey:            base64.StdEncoding.EncodeToString(x509.MarshalPKCS1PrivateKey(key)),
+		AppCertContent:        certPEM,
+		AlipayPublicCertContent: certPEM,
+		RootCertContent:       certPEM,
+	}
+	u, err := NewAlipayConfigUtil(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor, err := NewGenericExecuteApi(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := executor.PageExecute("alipay.trade.wap.pay", "GET",
+		map[string]interface{}{"biz_content": map[string]interface{}{"out_trade_no": "1"}}, "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "app_cert_sn=") || !strings.Contains(out, "alipay_root_cert_sn=") {
+		t.Fatalf("证书模式 URL 应含证书序列号参数: %s", out)
+	}
 }
 
 // TestV2PageExecutePost 校验 pageExecute POST 返回表单 HTML
@@ -390,6 +423,123 @@ func TestGetSignContent(t *testing.T) {
 	got := GetSignContent(params)
 	if got != "a=1&b=2" {
 		t.Fatalf("签名串不符: %s", got)
+	}
+}
+
+// TestSignContentNotifyVsRequest 对照两种拼接口径：
+// 请求侧剔除 "@" 前缀值，通知侧仅剔空值、保留 "@" 值。
+func TestSignContentNotifyVsRequest(t *testing.T) {
+	params := map[string]string{
+		"a": "@file.txt", "b": "1", "c": "", "d": "x",
+	}
+	if got := GetSignContent(params); got != "b=1&d=x" {
+		t.Fatalf("请求口径不符: %s", got)
+	}
+	if got := GetSignContentForNotify(params); got != "a=@file.txt&b=1&d=x" {
+		t.Fatalf("通知口径不符: %s", got)
+	}
+}
+
+// signNotifyGolden 按支付宝官方通知口径对给定待签串用私钥签名（测试辅助）
+func signNotifyGolden(t *testing.T, key *rsa.PrivateKey, content string) string {
+	t.Helper()
+	sign, err := AloneRsaSign(content,
+		base64.StdEncoding.EncodeToString(x509.MarshalPKCS1PrivateKey(key)), false)
+	if err != nil {
+		t.Fatalf("构造通知签名失败: %v", err)
+	}
+	return sign
+}
+
+// TestRsaCheckV1NotifyWithAtValue 离线验证通知验签（本地密钥自签，官方口径 golden 串）：
+// 覆盖正常通知、@ 开头值参与签名、空值字段不参与签名、篡改金额拒绝、错公钥拒绝。
+func TestRsaCheckV1NotifyWithAtValue(t *testing.T) {
+	key := genKeyPair(t)
+	pub, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	pubB64 := base64.StdEncoding.EncodeToString(pub)
+
+	params := map[string]string{
+		"app_id":       "2021000100000000",
+		"charset":      "UTF-8",
+		"gmt_payment":  "2024-01-01 12:00:00",
+		"notify_time":  "2024-01-01 12:00:01",
+		"buyer_id":     "",
+		"out_biz_no":   "",
+		"seller_id":    "",
+		"out_trade_no": "SN001",
+		"subject":      "@团购订单",
+		"total_amount": "0.01",
+		"trade_no":     "20240101001",
+		"trade_status": "TRADE_SUCCESS",
+		"sign_type":    "RSA2",
+	}
+
+	// 官方口径 golden：剔除 sign/sign_type 与全部空值后按升序拼接，subject 的 @ 值保留
+	const golden = "app_id=2021000100000000&charset=UTF-8&gmt_payment=2024-01-01 12:00:00" +
+		"&notify_time=2024-01-01 12:00:01&out_trade_no=SN001&subject=@团购订单" +
+		"&total_amount=0.01&trade_no=20240101001&trade_status=TRADE_SUCCESS"
+	if got := GetSignContentForNotify(copyParamsDelete(params, "sign", "sign_type")); got != golden {
+		t.Fatalf("通知口径拼接不符:\ngot =%s\nwant=%s", got, golden)
+	}
+	params["sign"] = signNotifyGolden(t, key, golden)
+
+	// 正常且含 @ 值、含空值字段的通知应验签通过
+	ok, err := RsaCheckV1(params, pubB64, false)
+	if err != nil || !ok {
+		t.Fatalf("含 @ 值通知验签应通过: ok=%v err=%v", ok, err)
+	}
+
+	// 篡改 total_amount 应拒绝
+	tampered := copyParams(params)
+	tampered["total_amount"] = "99.99"
+	ok, err = RsaCheckV1(tampered, pubB64, false)
+	if err != nil || ok {
+		t.Fatalf("篡改金额验签应失败: ok=%v err=%v", ok, err)
+	}
+
+	// 错误公钥应拒绝
+	otherKey := genKeyPair(t)
+	otherPub, _ := x509.MarshalPKIXPublicKey(&otherKey.PublicKey)
+	ok, err = RsaCheckV1(params, base64.StdEncoding.EncodeToString(otherPub), false)
+	if err != nil || ok {
+		t.Fatalf("错公钥验签应失败: ok=%v err=%v", ok, err)
+	}
+}
+
+// TestRsaCheckV1V2DeleteSets 对照 V1/V2 剔除集合：
+// sign_type 在 V1 被剔除、在 V2 参与签名，两侧不可互换。
+func TestRsaCheckV1V2DeleteSets(t *testing.T) {
+	key := genKeyPair(t)
+	pub, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	pubB64 := base64.StdEncoding.EncodeToString(pub)
+
+	params := map[string]string{
+		"out_trade_no": "SN002",
+		"trade_status": "TRADE_SUCCESS",
+		"sign_type":    "RSA2",
+	}
+	// V1 口径待签串（不含 sign_type）与 V2 口径待签串（含 sign_type）
+	const v1Content = "out_trade_no=SN002&trade_status=TRADE_SUCCESS"
+	const v2Content = "out_trade_no=SN002&sign_type=RSA2&trade_status=TRADE_SUCCESS"
+
+	v1Signed := copyParams(params)
+	v1Signed["sign"] = signNotifyGolden(t, key, v1Content)
+	ok, err := RsaCheckV1(v1Signed, pubB64, false)
+	if err != nil || !ok {
+		t.Fatalf("V1 口径签名应通过 V1 验签: ok=%v err=%v", ok, err)
+	}
+	if ok, _ = RsaCheckV2(v1Signed, pubB64, false); ok {
+		t.Fatal("V1 口径签名不应通过 V2 验签（sign_type 剔除集合不同）")
+	}
+
+	v2Signed := copyParams(params)
+	v2Signed["sign"] = signNotifyGolden(t, key, v2Content)
+	ok, err = RsaCheckV2(v2Signed, pubB64, false)
+	if err != nil || !ok {
+		t.Fatalf("V2 口径签名应通过 V2 验签: ok=%v err=%v", ok, err)
+	}
+	if ok, _ = RsaCheckV1(v2Signed, pubB64, false); ok {
+		t.Fatal("V2 口径签名不应通过 V1 验签（sign_type 剔除集合不同）")
 	}
 }
 
