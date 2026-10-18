@@ -1,0 +1,23 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test
+*.test
+*.out
+coverage.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generator temp
+tools/generator/oasSchema.json
