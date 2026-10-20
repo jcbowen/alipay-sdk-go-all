@@ -1,7 +1,10 @@
 package alipay
 
 import (
+	"crypto/x509"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -77,6 +80,94 @@ func RsaCheckV1(params map[string]string, alipayPublicKey string, keyFromFile bo
 	delete(copied, "sign_type")
 
 	return Verify(GetSignContentForNotify(copied), sign, alipayPublicKey, keyFromFile)
+}
+
+// RsaCheckV1WithCert 证书模式 RSA2 异步通知验签（V1 规则）。
+//
+// 证书模式下通知参数携带 alipay_cert_sn（发起通知所用支付宝公钥证书的序列号，
+// 由支付宝证书下载工具计算）：优先匹配支付宝公钥证书序列号，未命中再在根证书的
+// 证书链中按序列号查找，取对应证书段公钥验签；匹配不到即拒绝——这正是证书模式
+// 相对公钥模式多出来的防「证书过期/被替换」校验。拼接与剔除口径同 RsaCheckV1。
+//
+// 职责边界同 RsaCheckV1：只判定签名与证书序列号真伪，不校验 app_id、金额与交易状态，
+// 调用方必须自行完成业务侧校验。
+//
+// 参数:
+//   - params: 从支付宝接收到的完整参数集合（含 sign、alipay_cert_sn）
+//   - alipayPublicCertContent: 支付宝公钥证书内容（PEM）
+//   - rootCertContent: 支付宝根证书内容（PEM，可含多段证书）
+//
+// 返回值:
+//   - bool: true 验签通过
+//   - error: 缺少 sign、证书序列号不匹配、证书解析或验签异常
+//
+// 使用示例:
+//
+//	ok, err := alipay.RsaCheckV1WithCert(notifyParams, alipayPublicCertPEM, rootCertPEM)
+func RsaCheckV1WithCert(params map[string]string, alipayPublicCertContent, rootCertContent string) (bool, error) {
+	sign, err := extractSign(params)
+	if err != nil {
+		return false, err
+	}
+
+	pubKeyPEM, err := resolveNotifyCertPublicKey(params["alipay_cert_sn"], alipayPublicCertContent, rootCertContent)
+	if err != nil {
+		return false, err
+	}
+
+	copied := copyParams(params)
+	delete(copied, "sign")
+	delete(copied, "sign_type")
+
+	return Verify(GetSignContentForNotify(copied), sign, pubKeyPEM, false)
+}
+
+// resolveNotifyCertPublicKey 按通知的 alipay_cert_sn 定位验签用支付宝公钥（PEM）。
+//
+// 先比对支付宝公钥证书，未命中再遍历根证书链各段；两段都不命中时返回带序列号的错误，
+// 便于运维判断是证书过期还是配置串了应用。
+//
+// 参数:
+//   - certSN: 通知参数中的 alipay_cert_sn
+//   - alipayPublicCertContent: 支付宝公钥证书内容（PEM）
+//   - rootCertContent: 根证书内容（PEM，可含多段）
+//
+// 返回值:
+//   - string: 匹配证书段的公钥 PEM
+//   - error: 证书缺失、解析失败或序列号不匹配
+func resolveNotifyCertPublicKey(certSN, alipayPublicCertContent, rootCertContent string) (string, error) {
+	if strings.TrimSpace(alipayPublicCertContent) != "" {
+		sn, err := CertSN(alipayPublicCertContent)
+		if err != nil {
+			return "", fmt.Errorf("解析支付宝公钥证书失败: %w", err)
+		}
+		if sn == certSN {
+			pubKey, err := CertPublicKey(alipayPublicCertContent)
+			if err != nil {
+				return "", fmt.Errorf("提取支付宝公钥证书公钥失败: %w", err)
+			}
+			return security.FormatPublicKeyPEM(pubKey), nil
+		}
+	}
+
+	if strings.TrimSpace(rootCertContent) != "" {
+		for _, block := range splitPEMBlocks(rootCertContent, "CERTIFICATE") {
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				return "", fmt.Errorf("解析根证书段失败: %w", err)
+			}
+			if certSNFromCertificate(cert) != certSN {
+				continue
+			}
+			der, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
+			if err != nil {
+				return "", fmt.Errorf("导出根证书段公钥失败: %w", err)
+			}
+			return security.FormatPublicKeyPEM(base64.StdEncoding.EncodeToString(der)), nil
+		}
+	}
+
+	return "", fmt.Errorf("通知证书序列号不匹配（alipay_cert_sn=%s），请更新支付宝公钥证书与根证书", certSN)
 }
 
 // RsaCheckV2 密钥模式 RSA2 通用验签方法（V2 规则）。

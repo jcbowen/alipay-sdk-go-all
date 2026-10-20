@@ -56,6 +56,124 @@ func genSelfSignedCert(t *testing.T, serial *big.Int) (certPEM string) {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 }
 
+// genSignedSelfCert 生成带私钥的自签证书，供通知验签测试模拟支付宝侧证书
+func genSignedSelfCert(t *testing.T, serial int64) (certPEM string, key *rsa.PrivateKey) {
+	t.Helper()
+	key = genKeyPair(t)
+	tpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(serial),
+		Subject:               pkix.Name{Country: []string{"CN"}, Organization: []string{"Alipay"}, CommonName: "Test CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		SignatureAlgorithm:    x509.SHA256WithRSA,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("生成证书失败: %v", err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), key
+}
+
+// signNotifyParams 用支付宝侧私钥按 V1 通知口径签名，返回含 sign/sign_type 的完整参数
+func signNotifyParams(t *testing.T, key *rsa.PrivateKey, fields map[string]string, certSN string) map[string]string {
+	t.Helper()
+	params := make(map[string]string, len(fields)+3)
+	for k, v := range fields {
+		params[k] = v
+	}
+	if certSN != "" {
+		params["alipay_cert_sn"] = certSN
+	}
+	content := GetSignContentForNotify(copyParamsWithout(params, "sign", "sign_type"))
+	sig, err := AloneRsaSign(content, base64.StdEncoding.EncodeToString(x509.MarshalPKCS1PrivateKey(key)), false)
+	if err != nil {
+		t.Fatalf("伪造支付宝通知签名失败: %v", err)
+	}
+	params["sign"] = sig
+	params["sign_type"] = SignTypeRSA2
+	return params
+}
+
+// copyParamsWithout 复制参数并剔除指定键（测试内独立构造待验串）
+func copyParamsWithout(params map[string]string, drop ...string) map[string]string {
+	skip := make(map[string]bool, len(drop))
+	for _, k := range drop {
+		skip[k] = true
+	}
+	out := make(map[string]string, len(params))
+	for k, v := range params {
+		if skip[k] {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// TestRsaCheckV1WithCert 证书模式通知验签：命中支付宝公钥证书与根证书链段均通过，序列号不匹配必须拒绝
+func TestRsaCheckV1WithCert(t *testing.T) {
+	alipayCert, alipayKey := genSignedSelfCert(t, 88888888)
+	alipaySN, err := CertSN(alipayCert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootSN101, rootKey101 := genSignedSelfCert(t, 101)
+	rootSN202, _ := genSignedSelfCert(t, 202)
+	rootCert := rootSN101 + "\n" + rootSN202
+
+	fields := map[string]string{"app_id": "2021000000000000", "out_trade_no": "PAY1", "trade_status": "TRADE_SUCCESS", "total_amount": "12.34"}
+
+	t.Run("命中支付宝公钥证书", func(t *testing.T) {
+		params := signNotifyParams(t, alipayKey, fields, alipaySN)
+		ok, err := RsaCheckV1WithCert(params, alipayCert, rootCert)
+		if err != nil || !ok {
+			t.Fatalf("应验签通过: ok=%v err=%v", ok, err)
+		}
+	})
+
+	t.Run("命中根证书链段", func(t *testing.T) {
+		params := signNotifyParams(t, rootKey101, fields, mustSN(t, rootSN101))
+		ok, err := RsaCheckV1WithCert(params, alipayCert, rootCert)
+		if err != nil || !ok {
+			t.Fatalf("根证书链段应验签通过: ok=%v err=%v", ok, err)
+		}
+	})
+
+	t.Run("序列号不匹配拒绝", func(t *testing.T) {
+		params := signNotifyParams(t, alipayKey, fields, "deadbeef")
+		if ok, _ := RsaCheckV1WithCert(params, alipayCert, rootCert); ok {
+			t.Fatal("未知证书序列号不得验签通过")
+		}
+	})
+
+	t.Run("签名被篡改拒绝", func(t *testing.T) {
+		params := signNotifyParams(t, alipayKey, fields, alipaySN)
+		params["total_amount"] = "0.01"
+		if ok, _ := RsaCheckV1WithCert(params, alipayCert, rootCert); ok {
+			t.Fatal("篡改金额后不得验签通过")
+		}
+	})
+
+	t.Run("缺sign报错", func(t *testing.T) {
+		params := signNotifyParams(t, alipayKey, fields, alipaySN)
+		delete(params, "sign")
+		if _, err := RsaCheckV1WithCert(params, alipayCert, rootCert); err == nil {
+			t.Fatal("缺少 sign 应返回错误")
+		}
+	})
+}
+
+// mustSN 计算证书序列号，失败即终止测试
+func mustSN(t *testing.T, certPEM string) string {
+	t.Helper()
+	sn, err := CertSN(certPEM)
+	if err != nil {
+		t.Fatalf("计算证书序列号失败: %v", err)
+	}
+	return sn
+}
+
 // TestCertSNIssuerReversed 核心校验：issuer 按反序拼接后取 MD5（对齐 PHP array_reverse）
 func TestCertSNIssuerReversed(t *testing.T) {
 	certPEM := genSelfSignedCert(t, big.NewInt(123456789))
