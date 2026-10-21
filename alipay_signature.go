@@ -154,7 +154,9 @@ func resolveNotifyCertPublicKey(certSN, alipayPublicCertContent, rootCertContent
 		for _, block := range splitPEMBlocks(rootCertContent, "CERTIFICATE") {
 			cert, err := x509.ParseCertificate(block.Bytes)
 			if err != nil {
-				return "", fmt.Errorf("解析根证书段失败: %w", err)
+				// 跳过 Go 标准库无法解析的证书段（根证书文件含国密 SM2 段），
+				// 这类段不可能与 RSA 通知的 alipay_cert_sn 命中，报错返回会让整条验签失败
+				continue
 			}
 			if certSNFromCertificate(cert) != certSN {
 				continue

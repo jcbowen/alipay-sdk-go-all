@@ -50,14 +50,15 @@ func CertSN(certContent string) (string, error) {
 //
 // 根证书文件可能包含多段证书，逐段计算 SN 后以 "_" 连接；
 // 仅统计签名算法为 sha1WithRSAEncryption 或 sha256WithRSAEncryption 的证书段，
-// 与 PHP SDK 行为一致。
+// 与 PHP SDK 行为一致。Go 标准库无法解析的证书段（如支付宝根证书里的国密 SM2 段）
+// 本就不参与 SN 计算，直接跳过而非报错，否则一份合法根证书会被判成不可解析。
 //
 // 参数:
 //   - certContent: PEM 格式根证书内容（可含多段 -----BEGIN CERTIFICATE-----）
 //
 // 返回值:
-//   - string: 根证书序列号串（多段以 "_" 连接）
-//   - error: 任一段证书解析失败时返回错误
+//   - string: 根证书序列号串（多段以 "_" 连接，仅含可用的 RSA 证书段）
+//   - error: 找不到 PEM 段，或没有任何可解析的 RSA 证书段（视为内容非法）
 //
 // 使用示例:
 //
@@ -69,16 +70,20 @@ func RootCertSN(certContent string) (string, error) {
 	}
 
 	var sns []string
-	for i, block := range blocks {
+	for _, block := range blocks {
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			return "", fmt.Errorf("解析根证书第 %d 段失败: %w", i+1, err)
+			continue
 		}
 		// 对齐 PHP：仅统计 sha1WithRSAEncryption / sha256WithRSAEncryption
 		switch cert.SignatureAlgorithm {
 		case x509.SHA1WithRSA, x509.SHA256WithRSA:
 			sns = append(sns, certSNFromCertificate(cert))
 		}
+	}
+	// 全段都取不到 SN 说明内容不是根证书（错传成应用证书或纯文本），须继续拒绝
+	if len(sns) == 0 {
+		return "", errors.New("根证书中没有可解析的 RSA 证书段（sha1WithRSA/sha256WithRSA）")
 	}
 	return strings.Join(sns, "_"), nil
 }
