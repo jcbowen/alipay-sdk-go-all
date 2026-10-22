@@ -5,7 +5,7 @@
 - 全量 API：由代码生成器从官方 `oasSchema.json` 生成 **2722 个 Model** 与 **746 个 API 方法**
 - V3 协议：`ALIPAY-SHA256withRSA` 请求签名、响应验签、证书序列号（certSN/rootCertSN）、敏感信息 AES 加解密
 - V2 兼容：`pageExecute` / `sdkExecute` 支持 App 支付、手机网站支付、电脑网站支付等页面类接口
-- 异步通知：`RsaCheckV1` / `RsaCheckV2` 通用验签
+- 异步通知：`RsaCheckV1`（公钥模式）/ `RsaCheckV1WithCert`（证书模式）/ `RsaCheckV2` 通用验签
 - 跨平台：纯 Go 标准库 + [jcbaseGo](../jcbaseGo) 基础库，无 CGO，Win10 / macOS / Win11 均可直接编译
 
 ## 安装
@@ -152,10 +152,23 @@ if err == nil && ok {
 }
 ```
 
-- `RsaCheckV1`：支付通知等接口（剔除 `sign`、`sign_type` 与空值后验签，值以 `@` 开头的字段参与签名）
+```go
+// 证书模式：用支付宝公钥证书 + 根证书内容，按通知的 alipay_cert_sn 定位验签公钥
+ok, err := alipay.RsaCheckV1WithCert(params, alipayPublicCertPEM, rootCertPEM)
+```
+
+- `RsaCheckV1`：**公钥模式**支付通知等接口（剔除 `sign`、`sign_type` 与空值后验签，值以 `@` 开头的字段参与签名）
+- `RsaCheckV1WithCert`：**证书模式**支付通知等接口，拼接与剔除口径同上，额外按 `alipay_cert_sn` 匹配支付宝公钥证书
+  或根证书链段，匹配不到即拒绝
 - `RsaCheckV2`：生活号等应用网关消息（仅剔除 `sign`，`sign_type` 参与签名）
 
-> **职责边界**：`RsaCheckV1`/`RsaCheckV2` 只判定签名真伪，不校验业务字段——
+> **模式判定**：用哪个入口取决于**本应用在开放平台配置的加签方式**，不能由通知里有没有
+> `alipay_cert_sn` 反推。证书模式通知必带 `alipay_cert_sn`（发起通知所用支付宝公钥证书的序列号），
+> 缺失时 `RsaCheckV1WithCert` 一律拒绝、不回落支付宝公钥——该字段可被随意剥离，一旦回落，
+> 证书模式相对公钥模式多出来的证书校验就降级成了全商户共用的公钥校验。
+> 若平台侧实为公钥模式，请改用 `RsaCheckV1`。
+
+> **职责边界**：`RsaCheckV1`/`RsaCheckV1WithCert`/`RsaCheckV2` 只判定签名真伪，不校验业务字段——
 > 这与官方 PHP SDK 的职责划分一致。公钥模式下支付宝公钥为全商户共用，
 > 任何商户的合法通知都能通过验签。验签通过后，调用方必须自行完成：
 >
@@ -204,7 +217,7 @@ go build ./... && go test .
 go test . -v
 ```
 
-覆盖：证书 SN 计算（issuer 反序规则）、V3 签名串与 Authorization 格式、响应验签（含失败路径）、AES 加解密往返、httptest 模拟网关全流程（签名→服务端验签→响应签名→客户端验签→解密）、V2 sdkExecute/pageExecute（含公钥模式不输出空证书参数）、异步通知验签 V1/V2（官方通知口径 golden 串、`@` 前缀值参与签名、空值剔除、篡改/错公钥拒绝、V1/V2 剔除集合对照）。
+覆盖：证书 SN 计算（issuer 反序规则）、V3 签名串与 Authorization 格式、响应验签（含失败路径）、AES 加解密往返、httptest 模拟网关全流程（签名→服务端验签→响应签名→客户端验签→解密）、V2 sdkExecute/pageExecute（含公钥模式不输出空证书参数）、异步通知验签 V1/V2（官方通知口径 golden 串、`@` 前缀值参与签名、空值剔除、篡改/错公钥拒绝、V1/V2 剔除集合对照）、证书模式通知验签（命中支付宝公钥证书与根证书链段、序列号不匹配拒绝、篡改拒绝、缺 `alipay_cert_sn` 拒绝且不回落公钥）。
 
 ## 参考
 

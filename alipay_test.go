@@ -162,6 +162,22 @@ func TestRsaCheckV1WithCert(t *testing.T) {
 			t.Fatal("缺少 sign 应返回错误")
 		}
 	})
+
+	// 缺 alipay_cert_sn 必须拒绝：证书模式不因该字段缺失回落到公钥，
+	// 否则剥掉一个字段就能把证书 pinning 降级成全商户共用的公钥校验
+	t.Run("缺alipay_cert_sn拒绝且不回落", func(t *testing.T) {
+		params := signNotifyParams(t, alipayKey, fields, "")
+		ok, err := RsaCheckV1WithCert(params, alipayCert, rootCert)
+		if ok || err == nil {
+			t.Fatalf("缺少 alipay_cert_sn 应拒绝并报错: ok=%v err=%v", ok, err)
+		}
+		if !strings.Contains(err.Error(), "alipay_cert_sn") {
+			t.Fatalf("错误信息应指向 alipay_cert_sn 缺失，实际: %v", err)
+		}
+		if strings.Contains(err.Error(), "不匹配") {
+			t.Fatalf("缺字段与序列号不匹配是两种原因，错误信息不应混淆: %v", err)
+		}
+	})
 }
 
 // mustSN 计算证书序列号，失败即终止测试

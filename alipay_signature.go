@@ -89,6 +89,11 @@ func RsaCheckV1(params map[string]string, alipayPublicKey string, keyFromFile bo
 // 证书链中按序列号查找，取对应证书段公钥验签；匹配不到即拒绝——这正是证书模式
 // 相对公钥模式多出来的防「证书过期/被替换」校验。拼接与剔除口径同 RsaCheckV1。
 //
+// 模式判定口径：用本方法还是 RsaCheckV1，取决于本应用配置的加签方式，不能由通知
+// 字段反推。通知缺少 alipay_cert_sn 时一律拒绝、不回落支付宝公钥——该字段可被随意
+// 剥离，一旦回落就相当于把「本应用专属证书」校验降级成全商户共用的公钥校验。
+// 平台侧配置为公钥模式的应用应改用 RsaCheckV1。
+//
 // 职责边界同 RsaCheckV1：只判定签名与证书序列号真伪，不校验 app_id、金额与交易状态，
 // 调用方必须自行完成业务侧校验。
 //
@@ -99,7 +104,7 @@ func RsaCheckV1(params map[string]string, alipayPublicKey string, keyFromFile bo
 //
 // 返回值:
 //   - bool: true 验签通过
-//   - error: 缺少 sign、证书序列号不匹配、证书解析或验签异常
+//   - error: 缺少 sign、缺少 alipay_cert_sn、证书序列号不匹配、证书解析或验签异常
 //
 // 使用示例:
 //
@@ -110,7 +115,13 @@ func RsaCheckV1WithCert(params map[string]string, alipayPublicCertContent, rootC
 		return false, err
 	}
 
-	pubKeyPEM, err := resolveNotifyCertPublicKey(params["alipay_cert_sn"], alipayPublicCertContent, rootCertContent)
+	certSN := strings.TrimSpace(params["alipay_cert_sn"])
+	if certSN == "" {
+		return false, errors.New("证书模式通知缺少 alipay_cert_sn，请确认平台侧加签方式与本应用配置一致；" +
+			"平台侧为公钥模式的应用请改用 RsaCheckV1")
+	}
+
+	pubKeyPEM, err := resolveNotifyCertPublicKey(certSN, alipayPublicCertContent, rootCertContent)
 	if err != nil {
 		return false, err
 	}
@@ -125,10 +136,11 @@ func RsaCheckV1WithCert(params map[string]string, alipayPublicCertContent, rootC
 // resolveNotifyCertPublicKey 按通知的 alipay_cert_sn 定位验签用支付宝公钥（PEM）。
 //
 // 先比对支付宝公钥证书，未命中再遍历根证书链各段；两段都不命中时返回带序列号的错误，
-// 便于运维判断是证书过期还是配置串了应用。
+// 便于运维判断是证书过期还是配置串了应用。certSN 由调用方保证非空（必填校验在
+// RsaCheckV1WithCert 入口完成），此处不做空值兜底。
 //
 // 参数:
-//   - certSN: 通知参数中的 alipay_cert_sn
+//   - certSN: 通知参数中的 alipay_cert_sn（非空）
 //   - alipayPublicCertContent: 支付宝公钥证书内容（PEM）
 //   - rootCertContent: 根证书内容（PEM，可含多段）
 //
