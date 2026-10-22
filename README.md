@@ -163,8 +163,9 @@ ok, err := alipay.RsaCheckV1WithCert(params, alipayPublicCertPEM, rootCertPEM)
 - `RsaCheckV2`：生活号等应用网关消息（仅剔除 `sign`，`sign_type` 参与签名）
 
 > **模式判定**：用哪个入口取决于**本应用在开放平台配置的加签方式**，不能由通知里有没有
-> `alipay_cert_sn` 反推。证书模式通知必带 `alipay_cert_sn`（发起通知所用支付宝公钥证书的序列号），
-> 缺失时 `RsaCheckV1WithCert` 一律拒绝、不回落支付宝公钥——该字段可被随意剥离，一旦回落，
+> `alipay_cert_sn` 反推。证书模式通知携带 `alipay_cert_sn`（发起通知所用支付宝公钥证书的序列号；
+> 官方文档仅在同步响应场景明文承诺该字段，通知侧为实际报文口径），`RsaCheckV1WithCert` 将缺失
+> 视为剥离攻击一律拒绝、不回落支付宝公钥——该字段可被随意剥离，一旦回落，
 > 证书模式相对公钥模式多出来的证书校验就降级成了全商户共用的公钥校验。
 > 若平台侧实为公钥模式，请改用 `RsaCheckV1`。
 
