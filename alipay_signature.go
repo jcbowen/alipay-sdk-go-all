@@ -160,6 +160,9 @@ func RsaCheckV1WithCert(params map[string]string, alipayPublicCertContent, rootC
 //   - certSN 有值 → 按序列号严格定位，不命中即拒。
 func notifyVerifyKey(certSN, alipayPublicCertContent, rootCertContent string) (string, error) {
 	if certSN == "" {
+		if strings.TrimSpace(alipayPublicCertContent) == "" {
+			return "", errors.New("缺少支付宝公钥证书内容")
+		}
 		pubKey, err := CertPublicKey(alipayPublicCertContent)
 		if err != nil {
 			return "", fmt.Errorf("提取支付宝公钥证书公钥失败: %w", err)
