@@ -197,9 +197,25 @@ ok, err := alipay.RsaCheckV1WithCert(params, alipayPublicCertPEM, rootCertPEM)
 > 4. `trade_status` 属于需要处理的状态，且重复通知幂等；
 > 5. 通知来源 URL/域名校验与 `failure` 时返回失败应答（支付宝按策略重发约 25 小时）。
 
-> **待核实：空值字段的拼接口径** 官方 PHP v2 `getCheckSignContent` 不过滤空值（`key=` 会照拼进待签串），
-> 本仓库 `GetSignContentForNotify` 跳过空值。通知字段全非空时两者等价，若支付宝推来带空值字段的通知
-> 则可能出现假失败。最终口径以官方《自行实现验签》原文为准，核实前维持现有行为。
+> **已核实：空值字段的拼接口径** 官方《自行实现验签》(`common/02mse7`) 与《异步通知说明》只写
+> 「除去 `sign`、`sign_type`，通知返回的参数均为待验签参数」+「url_decode 后字典排序」，
+> **通篇未规定空值是否剔除**，示例代码一律用 Java。各家 SDK 自身即不一致：
+>
+> | SDK | 通知侧待签串函数 | 空值/纯空白字段 | `@` 前缀值 |
+> |---|---|---|---|
+> | Java v2 | `getSignCheckContentV1` | **剔除**（`StringUtils.isEmpty` 含全空白） | 保留 |
+> | .NET v2 | `GetSignContent`（`RSACheckV1` 调用） | **剔除**（`IsNullOrEmpty`） | 保留 |
+> | PHP v2 | `getSignContent`（`rsaCheckV1` 调用） | 保留，拼成 `key=` | **剔除** |
+> | PHP v3 | `Util/AlipaySignature::getSignContent` | 保留 | **剔除** |
+> | Node v4 | `notifyRSACheck`（`filter(val => val)` 只过滤空 key） | 保留 | 保留 |
+> | 本仓库 | `GetSignContentForNotify` | **剔除**（同 Java） | 保留（同 Java/.NET/Node） |
+>
+> 即本仓库与 Java/.NET 完全一致，与 PHP/Node 不一致——两套口径互斥，同一份含空值字段的通知不可能同时通过两侧。
+> 二者能长期共存说明支付宝网关实际不下发空值字段（否则 Java 用户会成片验签失败），故本仓库无需改动。
+> 残余风险仅在网关某天真的推送空值字段时出现，届时需以真报文为准重定口径。
+> 另：文档要求的 `url_decode` 在 Go 侧由 `r.PostForm` 完成，调用方勿再二次解码。
+> 复核来源：`raw.githubusercontent.com/alipay/alipay-sdk-{java,php,net,nodejs}-all`（v2/v3 对应文件）
+> 与 `opendocs.alipay.com/common/02mse7.md`、`common/00f7nu.md`（URL 加 `.md` 取纯正文）。
 
 ## 敏感信息加密
 

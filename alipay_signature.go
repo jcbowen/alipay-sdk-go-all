@@ -271,9 +271,11 @@ func GetSignContent(params map[string]string) string {
 // 对齐支付宝官方通知验签口径：值以 "@" 开头的字段照常参与签名
 // （如 subject="@团购订单"），剔除集合由调用方（RsaCheckV1/V2）决定。
 //
-// 待核实：官方 PHP v2 getCheckSignContent 不过滤空值（key= 会照拼进串），本实现跳过空值。
-// 支付宝通知字段全非空时两者等价，一旦出现带空值字段的通知就会出现假失败；
-// 最终口径应以官方《自行实现验签》原文为准，核实前保持现有行为不变。
+// 已核实（README「空值字段的拼接口径」有各家 SDK 对照表）：官方文档《自行实现验签》只说
+// 「除去 sign、sign_type，通知返回的参数均为待验签参数」，未规定空值处理；Java v2
+// getSignCheckContentV1 与 .NET GetSignContent 剔除空/空白值，PHP v2/v3 getSignContent 与
+// Node notifyRSACheck 保留（且 PHP 反而剔除 @ 前缀值）。本实现取 Java/.NET 口径：剔除空值、
+// 保留 @ 值。两套口径互斥，能长期共存说明网关实际不下发空值字段，故维持现状。
 //
 // 参数:
 //   - params: 已剔除相应参数的通知参数集合
