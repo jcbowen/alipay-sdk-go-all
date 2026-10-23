@@ -277,11 +277,11 @@ func TestConfigUtilSignAuthorizationFormat(t *testing.T) {
 	// 证书模式包含 app_cert_sn
 	certPEM := genSelfSignedCert(t, big.NewInt(999))
 	cfg2 := &AlipayConfig{
-		AppId:           "2021000100000000",
-		PrivateKey:      base64.StdEncoding.EncodeToString(x509.MarshalPKCS1PrivateKey(key)),
-		AppCertContent:  certPEM,
+		AppId:                   "2021000100000000",
+		PrivateKey:              base64.StdEncoding.EncodeToString(x509.MarshalPKCS1PrivateKey(key)),
+		AppCertContent:          certPEM,
 		AlipayPublicCertContent: certPEM,
-		RootCertContent: certPEM,
+		RootCertContent:         certPEM,
 	}
 	u2, err := NewAlipayConfigUtil(cfg2)
 	if err != nil {
@@ -517,11 +517,11 @@ func TestV2PageExecuteGetCertMode(t *testing.T) {
 	key := genKeyPair(t)
 	certPEM := genSelfSignedCert(t, big.NewInt(999))
 	cfg := &AlipayConfig{
-		AppId:                 "app001",
-		PrivateKey:            base64.StdEncoding.EncodeToString(x509.MarshalPKCS1PrivateKey(key)),
-		AppCertContent:        certPEM,
+		AppId:                   "app001",
+		PrivateKey:              base64.StdEncoding.EncodeToString(x509.MarshalPKCS1PrivateKey(key)),
+		AppCertContent:          certPEM,
 		AlipayPublicCertContent: certPEM,
-		RootCertContent:       certPEM,
+		RootCertContent:         certPEM,
 	}
 	u, err := NewAlipayConfigUtil(cfg)
 	if err != nil {
@@ -696,12 +696,12 @@ func TestRsaCheckV1V2(t *testing.T) {
 	pubB64 := base64.StdEncoding.EncodeToString(pub)
 
 	params := map[string]string{
-		"gmt_create":  "2024-01-01 00:00:00",
-		"trade_no":    "20240101001",
+		"gmt_create":   "2024-01-01 00:00:00",
+		"trade_no":     "20240101001",
 		"out_trade_no": "123",
 		"trade_status": "TRADE_SUCCESS",
-		"sign_type":   "RSA2",
-		"sign":        "",
+		"sign_type":    "RSA2",
+		"sign":         "",
 	}
 
 	// V1：剔除 sign 与 sign_type 后签名

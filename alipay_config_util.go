@@ -32,21 +32,21 @@ const AuthScheme = "ALIPAY-SHA256withRSA"
 //	    panic(err)
 //	}
 type AlipayConfigUtil struct {
-	serverUrl             string
-	appId                 string
-	privateKey            string // 已包装为 PEM 的私钥文本
-	privateKeyFilePath    string
-	alipayPublicKey       string // 已包装为 PEM 的支付宝公钥文本
+	serverUrl               string
+	appId                   string
+	privateKey              string // 已包装为 PEM 的私钥文本
+	privateKeyFilePath      string
+	alipayPublicKey         string // 已包装为 PEM 的支付宝公钥文本
 	alipayPublicKeyFilePath string
-	rootCertSN            string
-	appCertSN             string
-	encryptType           string
-	encryptKey            string
+	rootCertSN              string
+	appCertSN               string
+	encryptType             string
+	encryptKey              string
 
 	// cachedAlipayPublicKey 证书模式：支付宝公钥证书序列号 → PEM 公钥文本
 	cachedAlipayPublicKey map[string]string
 
-	mu          sync.Mutex
+	mu               sync.Mutex
 	privateKeyCached *rsa.PrivateKey // 惰性解析缓存
 	publicKeyCached  *rsa.PublicKey  // 公钥模式惰性解析缓存
 }
@@ -74,13 +74,13 @@ func NewAlipayConfigUtil(config *AlipayConfig) (*AlipayConfigUtil, error) {
 	}
 
 	u := &AlipayConfigUtil{
-		serverUrl:             strings.TrimSpace(config.ServerUrl),
-		appId:                 config.AppId,
-		privateKeyFilePath:    config.PrivateKeyFilePath,
+		serverUrl:               strings.TrimSpace(config.ServerUrl),
+		appId:                   config.AppId,
+		privateKeyFilePath:      config.PrivateKeyFilePath,
 		alipayPublicKeyFilePath: config.AlipayPublicKeyFilePath,
-		encryptType:           config.EncryptType,
-		encryptKey:            config.EncryptKey,
-		cachedAlipayPublicKey: make(map[string]string),
+		encryptType:             config.EncryptType,
+		encryptKey:              config.EncryptKey,
+		cachedAlipayPublicKey:   make(map[string]string),
 	}
 	if u.serverUrl == "" {
 		u.serverUrl = DefaultServerUrl
@@ -499,4 +499,3 @@ func firstHeaderValue(headers http.Header, key string) string {
 	}
 	return values[0]
 }
-
