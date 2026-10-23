@@ -111,7 +111,8 @@ func copyParamsWithout(params map[string]string, drop ...string) map[string]stri
 	return out
 }
 
-// TestRsaCheckV1WithCert 证书模式通知验签：命中支付宝公钥证书与根证书链段均通过，序列号不匹配必须拒绝
+// TestRsaCheckV1WithCert 证书模式通知验签：命中支付宝公钥证书与根证书链段均通过，
+// 缺 alipay_cert_sn 时用本证书公钥验签（官方主路径），序列号不匹配必须拒绝
 func TestRsaCheckV1WithCert(t *testing.T) {
 	alipayCert, alipayKey := genSignedSelfCert(t, 88888888)
 	alipaySN, err := CertSN(alipayCert)
@@ -163,19 +164,30 @@ func TestRsaCheckV1WithCert(t *testing.T) {
 		}
 	})
 
-	// 缺 alipay_cert_sn 必须拒绝：证书模式不因该字段缺失回落到公钥，
-	// 否则剥掉一个字段就能把证书 pinning 降级成全商户共用的公钥校验
-	t.Run("缺alipay_cert_sn拒绝且不回落", func(t *testing.T) {
+	// 官方从不承诺通知带 alipay_cert_sn（该字段属同步响应侧），缺字段时按官方主路径
+	// 用本商户支付宝公钥证书公钥验签，必须通过
+	t.Run("缺alipay_cert_sn用本证书公钥通过", func(t *testing.T) {
 		params := signNotifyParams(t, alipayKey, fields, "")
 		ok, err := RsaCheckV1WithCert(params, alipayCert, rootCert)
-		if ok || err == nil {
-			t.Fatalf("缺少 alipay_cert_sn 应拒绝并报错: ok=%v err=%v", ok, err)
+		if err != nil || !ok {
+			t.Fatalf("缺 alipay_cert_sn 的合法通知应验签通过: ok=%v err=%v", ok, err)
 		}
-		if !strings.Contains(err.Error(), "alipay_cert_sn") {
-			t.Fatalf("错误信息应指向 alipay_cert_sn 缺失，实际: %v", err)
+	})
+
+	// 缺字段不等于放宽验签钥匙：非本商户证书私钥签的通知仍必须拒绝
+	t.Run("缺alipay_cert_sn且非本证书签名拒绝", func(t *testing.T) {
+		_, otherKey := genSignedSelfCert(t, 77777777)
+		params := signNotifyParams(t, otherKey, fields, "")
+		if ok, _ := RsaCheckV1WithCert(params, alipayCert, rootCert); ok {
+			t.Fatal("非本商户支付宝公钥证书私钥签的通知不得验签通过")
 		}
-		if strings.Contains(err.Error(), "不匹配") {
-			t.Fatalf("缺字段与序列号不匹配是两种原因，错误信息不应混淆: %v", err)
+	})
+
+	// 缺字段且缺支付宝公钥证书配置：无钥匙可用，应报错而不是静默通过
+	t.Run("缺alipay_cert_sn且无证书报错", func(t *testing.T) {
+		params := signNotifyParams(t, alipayKey, fields, "")
+		if _, err := RsaCheckV1WithCert(params, "", rootCert); err == nil {
+			t.Fatal("未配置支付宝公钥证书应返回错误")
 		}
 	})
 }

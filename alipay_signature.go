@@ -56,7 +56,8 @@ func RsaSign(params map[string]string, privateKey string, keyFromFile bool) (str
 // 剩余参数按通知口径拼接（仅剔除空值，值以 "@" 开头的字段参与签名）。
 //
 // 职责边界：本方法只判定签名真伪，不校验 app_id、seller_id、金额与通知 URL，
-// 调用方必须自行完成业务侧校验（公钥模式下支付宝公钥全商户共用）。
+// 调用方必须自行完成业务侧校验（公钥模式下「支付宝公钥全商户共用」一说尚缺官方原文
+// 依据，仅为本仓库既有认知，稳妥起见按共用处理）。
 //
 // 参数:
 //   - params: 从支付宝接收到的完整参数集合（含 sign）
@@ -84,27 +85,42 @@ func RsaCheckV1(params map[string]string, alipayPublicKey string, keyFromFile bo
 
 // RsaCheckV1WithCert 证书模式 RSA2 异步通知验签（V1 规则）。
 //
-// 证书模式下通知参数携带 alipay_cert_sn（发起通知所用支付宝公钥证书的序列号，
-// 由支付宝证书下载工具计算）：优先匹配支付宝公钥证书序列号，未命中再在根证书的
-// 证书链中按序列号查找，取对应证书段公钥验签；匹配不到即拒绝——这正是证书模式
-// 相对公钥模式多出来的防「证书过期/被替换」校验。拼接与剔除口径同 RsaCheckV1。
+// 待签串拼接与剔除口径同 RsaCheckV1；验签公钥按通知的 alipay_cert_sn 分两条路径选定：
+//
+//  1. alipay_cert_sn 缺失或为空 —— 官方主路径，直接用本商户支付宝公钥证书
+//     （alipayPublicCertContent）内的公钥验签。这不是「兜底」也不是「回落到公钥模式」：
+//     这把钥匙仍是本应用专属的支付宝公钥证书公钥，商户维度绑定没丢。
+//     依据：官方 Java v2 rsaCertCheckV1、PHP v2 rsaCheckV1、Node v4 checkNotifySign、
+//     .NET CertVerifyV1、EasySDK 的通知验签入口全部不读 alipay_cert_sn，一律用本地
+//     支付宝公钥证书公钥；PHP v3 getAlipayPublicKeyWithSN 注释原话「如果没有指定 sn，
+//     则默认取缓存中的第一个值」；《自行实现验签》把该字段描述为同步响应报文里多出来的
+//     响应参数，各产品《异步通知说明》参数表通篇未列它，《证书升级指南》也只要求
+//     「收到请求报文后用支付宝公钥证书做验签」。
+//     把响应侧的 SN 语义搬到通知侧、要求该字段必填，会把支付宝未带该字段的合法通知
+//     整批判成验签失败（2026-10-23 生产实锤）。
+//  2. alipay_cert_sn 有值 —— 按序列号严格定位（先本证书，再根证书链各段），不命中即拒。
+//     这一处有意严于 Java/.NET/Node（它们拿到 SN 也不比对），对齐官方 PHP v3
+//     getAlipayPublicKeyWithSN 与 EasySDK getAlipayPublicKey(sn) 的「SN 定位不到即抛证书已过期」，
+//     用途是证书轮换/过期后的主动告警，而不是防伪造。
+//
+// 两条路径不可混谈：alipay_cert_sn 本身参与待签串（它是通知参数之一，按 key 升序拼入），
+// 从真通知里剥掉它签名立刻对不上，自拼一条不带它的通知又因无私钥同样对不上——
+// 「缺字段即拒」防的是一个会自毁的伪造，代价是把官方文档描述的常态判成攻击。
 //
 // 模式判定口径：用本方法还是 RsaCheckV1，取决于本应用配置的加签方式，不能由通知
-// 字段反推。通知缺少 alipay_cert_sn 时一律拒绝、不回落支付宝公钥——该字段可被随意
-// 剥离，一旦回落就相当于把「本应用专属证书」校验降级成全商户共用的公钥校验。
-// 平台侧配置为公钥模式的应用应改用 RsaCheckV1。
+// 字段反推。平台侧配置为公钥模式的应用应改用 RsaCheckV1。
 //
 // 职责边界同 RsaCheckV1：只判定签名与证书序列号真伪，不校验 app_id、金额与交易状态，
 // 调用方必须自行完成业务侧校验。
 //
 // 参数:
-//   - params: 从支付宝接收到的完整参数集合（含 sign、alipay_cert_sn）
+//   - params: 从支付宝接收到的完整参数集合（含 sign；alipay_cert_sn 可有可无）
 //   - alipayPublicCertContent: 支付宝公钥证书内容（PEM）
-//   - rootCertContent: 支付宝根证书内容（PEM，可含多段证书）
+//   - rootCertContent: 支付宝根证书内容（PEM，可含多段证书；仅当 alipay_cert_sn 有值时参与定位）
 //
 // 返回值:
 //   - bool: true 验签通过
-//   - error: 缺少 sign、缺少 alipay_cert_sn、证书序列号不匹配、证书解析或验签异常
+//   - error: 缺少 sign、证书缺失或解析失败、证书序列号不匹配、验签异常
 //
 // 使用示例:
 //
@@ -115,29 +131,49 @@ func RsaCheckV1WithCert(params map[string]string, alipayPublicCertContent, rootC
 		return false, err
 	}
 
-	certSN := strings.TrimSpace(params["alipay_cert_sn"])
-	if certSN == "" {
-		return false, errors.New("证书模式通知缺少 alipay_cert_sn，请确认平台侧加签方式与本应用配置一致；" +
-			"平台侧为公钥模式的应用请改用 RsaCheckV1")
-	}
-
-	pubKeyPEM, err := resolveNotifyCertPublicKey(certSN, alipayPublicCertContent, rootCertContent)
-	if err != nil {
-		return false, err
-	}
-
 	copied := copyParams(params)
 	delete(copied, "sign")
 	delete(copied, "sign_type")
 
-	return Verify(GetSignContentForNotify(copied), sign, pubKeyPEM, false)
+	certSN := strings.TrimSpace(params["alipay_cert_sn"])
+	verifyKey, err := notifyVerifyKey(certSN, alipayPublicCertContent, rootCertContent)
+	if err != nil {
+		return false, err
+	}
+
+	return Verify(GetSignContentForNotify(copied), sign, verifyKey, false)
 }
 
-// resolveNotifyCertPublicKey 按通知的 alipay_cert_sn 定位验签用支付宝公钥（PEM）。
+// notifyVerifyKey 选定证书模式通知的验签公钥，两条路径互不混用。
+//
+// 参数:
+//   - certSN: 通知里的 alipay_cert_sn，已 TrimSpace，可为空
+//   - alipayPublicCertContent: 支付宝公钥证书内容（PEM）
+//   - rootCertContent: 根证书内容（PEM，可含多段）
+//
+// 返回值:
+//   - string: 验签用公钥（裸 base64 DER 或 PEM）
+//   - error: 证书缺失、解析失败或序列号不匹配
+//
+// 说明:
+//   - certSN 为空 → 本商户支付宝公钥证书公钥，官方通知验签主路径（详见 RsaCheckV1WithCert）；
+//   - certSN 有值 → 按序列号严格定位，不命中即拒。
+func notifyVerifyKey(certSN, alipayPublicCertContent, rootCertContent string) (string, error) {
+	if certSN == "" {
+		pubKey, err := CertPublicKey(alipayPublicCertContent)
+		if err != nil {
+			return "", fmt.Errorf("提取支付宝公钥证书公钥失败: %w", err)
+		}
+		return pubKey, nil
+	}
+	return resolveNotifyCertPublicKey(certSN, alipayPublicCertContent, rootCertContent)
+}
+
+// resolveNotifyCertPublicKey 按通知的 alipay_cert_sn 严格定位验签用支付宝公钥（PEM）。
 //
 // 先比对支付宝公钥证书，未命中再遍历根证书链各段；两段都不命中时返回带序列号的错误，
-// 便于运维判断是证书过期还是配置串了应用。certSN 由调用方保证非空（必填校验在
-// RsaCheckV1WithCert 入口完成），此处不做空值兜底。
+// 便于运维判断是证书过期还是配置串了应用。仅 RsaCheckV1WithCert 在 certSN 非空时调用，
+// 空 SN 走证书公钥主路径，不进本函数（见该函数注释的两种路径划分）。
 //
 // 参数:
 //   - certSN: 通知参数中的 alipay_cert_sn（非空）
@@ -234,6 +270,10 @@ func GetSignContent(params map[string]string) string {
 //
 // 对齐支付宝官方通知验签口径：值以 "@" 开头的字段照常参与签名
 // （如 subject="@团购订单"），剔除集合由调用方（RsaCheckV1/V2）决定。
+//
+// 待核实：官方 PHP v2 getCheckSignContent 不过滤空值（key= 会照拼进串），本实现跳过空值。
+// 支付宝通知字段全非空时两者等价，一旦出现带空值字段的通知就会出现假失败；
+// 最终口径应以官方《自行实现验签》原文为准，核实前保持现有行为不变。
 //
 // 参数:
 //   - params: 已剔除相应参数的通知参数集合
