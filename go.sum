@@ -45,8 +45,8 @@ github.com/google/go-cmp v0.2.0/go.mod h1:oXzfMopK8JAjlY9xF4vHSVASa0yLyX7SntLO5a
 github.com/google/go-cmp v0.3.0/go.mod h1:8QqcDgzrUqlUb/G2PQTWiueGozuR1884gddMywk6iLU=
 github.com/google/go-cmp v0.3.1/go.mod h1:8QqcDgzrUqlUb/G2PQTWiueGozuR1884gddMywk6iLU=
 github.com/google/go-cmp v0.4.0/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=
-github.com/jcbowen/jcbaseGo v0.16.6 h1:TLkUaw89JajyyamWKBPQF3ovyh2c9PEdpW7Pf2ZVrFY=
-github.com/jcbowen/jcbaseGo v0.16.6/go.mod h1:seExGN1C2aZLSznhOwQg241pbOcQ/1cOhtij5nZQUEo=
+github.com/jcbowen/jcbaseGo v0.16.8 h1:hM4C4aGQO5blacMPEI90DhLyddYGRENXClyHztzau5E=
+github.com/jcbowen/jcbaseGo v0.16.8/go.mod h1:seExGN1C2aZLSznhOwQg241pbOcQ/1cOhtij5nZQUEo=
 github.com/jinzhu/inflection v1.0.0 h1:K317FqzuhWc8YvSVlFMCCUb36O/S9MCKRDI7QkRKD/E=
 github.com/jinzhu/inflection v1.0.0/go.mod h1:h+uFLlag+Qp1Va5pdKtLDYj+kHp5pxUVkryuEj+Srlc=
 github.com/jinzhu/now v1.1.5 h1:/o9tlHleP7gOFmsnYNz3RGnqzefHA47wQpKrrdTIwXQ=
