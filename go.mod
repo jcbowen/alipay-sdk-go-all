@@ -2,7 +2,7 @@ module github.com/jcbowen/alipay-sdk-go-all
 
 go 1.26.0
 
-require github.com/jcbowen/jcbaseGo v0.16.8
+require github.com/jcbowen/jcbaseGo v0.17.6
 
 require (
 	github.com/tjfoc/gmsm v1.4.1 // indirect
